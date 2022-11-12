@@ -116,6 +116,7 @@ class PushBox(object):
 
     def _reward(self):
         rew = 0
+        # If box is against a wall, give a reward (MEANS THIS IS A SPARSE REWARD)
         if self.box.x - self.box.radius == 0 or self.box.x + self.box.radius == self.grid_size - 1 \
                 or self.box.y - self.box.radius == 0 or self.box.y + self.box.radius == self.grid_size - 1:
             rew += self.success_rew
