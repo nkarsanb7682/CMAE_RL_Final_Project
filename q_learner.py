@@ -7,6 +7,17 @@ import scipy
 from utils import pq
 import bisect
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchsummary import summary
+import matplotlib
+import matplotlib.pyplot as plt
+from itertools import count
+from tqdm import tqdm
+from utils.convert2base import obs_to_int_pi
+
+from HER_DQN import HER_DQN
 
 class Storage(object):
     def __init__(self, max_size=50000):
@@ -362,6 +373,9 @@ class ActiveQLearning(QLearning):
         return goal_s, goal_a
 
     def insert_data(self, s, a, r, s_next, done, th=10000):
+        # print('s', s)
+        # print('a', a)
+        #print('self.count', self.count)
         if self.count[s, a] < th:
             self.replay_buffer.insert(s, a, r, s_next, done)
 
@@ -378,7 +392,8 @@ class ActiveQLearning(QLearning):
                     for i in range(len(self.subspaces)):
                         self.subspaces[i] = (norm_ents[i], self.subspaces[i][1], self.subspaces[i][2])
                         self.subspace_q.push(self.subspaces[i])
-
+                    # print("self.stochastic_select_subspace", self.stochastic_select_subspace)
+                    self.stochastic_select_subspace = True
                     if self.stochastic_select_subspace:
                         level_penalty = np.array([space[1] * self.level_penalty for space in self.subspaces])
                         exp_ent = np.exp(-self.recip_t * np.array(norm_ents) + level_penalty)
@@ -491,7 +506,253 @@ class ActiveQLearning(QLearning):
     def reset_q(self):
         self.q_table[:] = 0
 
+class DeepQLearning(ActiveQLearning):
+    # Source: https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+    def __init__(self, n_states, n_actions, base, raw_dim, observation_space=None, gamma=0.9, alpha=0.2, goal_q_len=300,
+                 all_subspace=False, no_range_info=False, stochastic_select_subspace=False, tree_subspace=False,
+                 recip_t=50, subspace_q_size=10, replay_size=50000, level_penalty=False, priority_sample=True):
+        super(DeepQLearning, self).__init__(n_states, n_actions, base, raw_dim, observation_space, gamma, alpha,
+                                              all_subspace=all_subspace, tree_subspace=tree_subspace,
+                                              subspace_q_size=subspace_q_size)
+        #print("all_subspace", all_subspace)            
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.policy_net = HER_DQN().to(self.device)
+        self.target_net = HER_DQN().to(self.device)
+        #print(summary(self.target_net, (1, 6)))
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
+        self.episode_durations = []
+        self.optimizer = optim.RMSprop(self.policy_net.parameters())
 
+        self.BATCH_SIZE = 300
+        self.GAMMA = 0.85
+        self.TARGET_UPDATE = 10
+
+        # set up matplotlib
+        self.is_ipython = 'inline' in matplotlib.get_backend()
+        if self.is_ipython:
+            from IPython import display
+
+        plt.ion()
+    
+    def trainDQN(self, env, eps, agentNum):
+        num_episodes = 20
+        raw_obs_dim = env.observation_space.nvec.size
+        agentNum = agentNum - 1
+        for i_episode in tqdm(range(num_episodes)):
+            #print(f"Episode {i_episode}/{num_episodes}")
+            # Initialize the environment and state
+            state = env.reset() # format (agent1_x, agent1_y, agent2_x, agent2_y, box_x, box_y)
+            state, _ = obs_to_int_pi(state, base=env.grid_size, raw_dim=raw_obs_dim)
+
+            for t in count():
+                
+                action = self.select_action(state, eps)
+                if torch.is_tensor(action[0]):
+                    action = [x.item() for x in action]
+                #print(action)
+                next_state, reward, done = env.step(action, True) # Problem. step function assumes there are multiple agents
+                #print("next_state", next_state)
+                reward = torch.tensor([reward], device=self.device) 
+
+                if done:
+                    next_state = None
+                
+                # Store the transition in memory
+                if not done:
+                    #print("TESTEST", state, action[agentNum], reward, next_state, done)
+                    next_state, _ = obs_to_int_pi(next_state, base=env.grid_size, raw_dim=raw_obs_dim)
+                    #print(next_state)
+                    self.insert_data(state, action[agentNum], reward, next_state, done) # Use actions for agent 1
+                else:
+                    self.insert_data(state, action[agentNum], reward, 1, done)
+
+                # Move to the next state
+                #print("pre", state)
+                state = next_state
+                #print("post", state)
+
+
+                # Perform one step of the optimization (on the policy network)
+                self.optimize_model(agentNum)
+                if done:
+                    #print("HTCFUYCUYCUYCUYCUYCUYCUYC")
+                    self.episode_durations.append(t + 1)
+                    self.plot_durations()
+                    break
+
+                # Update the target network, copying all weights and biases in DQN
+                if t % self.TARGET_UPDATE == 0:
+                    self.target_net.load_state_dict(self.policy_net.state_dict())
+        print('Complete')
+        eps = eps - (eps * (eps/num_episodes)) # Decay epsilon
+        #env.render()
+        #env.close()
+        plt.ioff()
+        plt.show()
+
+    def optimize_model(self, agent_id):
+        # if self.replay_buffer.max_size < self.BATCH_SIZE:
+        #     return
+
+
+
+        # transitions = memory.sample(BATCH_SIZE)
+        # full_buffer = [s for s in self.replay_buffer.get_all_data()]
+        # if len(full_buffer) < self.BATCH_SIZE:
+        #     batch = full_buffer
+        # else:
+        batch = self.replay_buffer.get_random_batch(self.BATCH_SIZE)
+        #batch = [random.randint(0, self.BATCH_SIZE)]#self.replay_buffer.get_random_batch(self.BATCH_SIZE) # *zip(*transitions) # Need to format to replay_buffer format
+
+        outputs = []
+        targets = []
+        for _ in range(self.BATCH_SIZE):
+            transitionTuple = next(batch)
+            s = torch.from_numpy(np.array([transitionTuple[0]]).astype(np.float32))
+            r = torch.from_numpy(np.array([transitionTuple[2]]).astype(np.float32))
+            output = self.policy_net(s)[agent_id + 2]
+            target = self.target_net(s)[2]#[agent_id] #torch.from_numpy(np.array(self.target_net(s)))
+            # print("output", output)
+            # print("target", target)
+            target = (target * self.GAMMA) + r
+            #print("target", target)
+            outputs.append(output)
+            targets.append(target)
+
+            loss_fn = nn.SmoothL1Loss()
+            loss = loss_fn(output, target)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            loss = loss.item()
+        return loss
+            #print(f"loss: {loss:>7f}")
+
+
+        # print(outputs)
+        # print("_____")
+        # print(targets)
+
+        # #print(outputs, targets)
+        # outputs = torch.stack(outputs)
+        # targets = torch.stack(targets)
+        # #print("outputs, targets", outputs, targets)
+        # loss_fn = nn.CrossEntropyLoss()
+        # loss = loss_fn(outputs, targets)
+        # self.optimizer.zero_grad()
+        # loss.backward()
+        # self.optimizer.step()
+        # loss = loss.item()
+        # print(f"loss: {loss:>7f}")
+
+
+        # non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
+        #                                     batch)), device=self.device, dtype=torch.bool)
+
+        # list_non_final_next_states = []
+        # list_state_batch = []
+        # list_action_batch = []
+        # list_reward_batch = []
+        # for s, a, r, ns, done in batch:
+        #     if ns is not None:
+        #         print(s, a, r, ns, done)
+        #         list_non_final_next_states.append(torch.LongTensor(ns))
+        #         list_state_batch.append(torch.LongTensor(s))
+        #         list_action_batch.append(torch.LongTensor(a))
+        #         list_reward_batch.append(torch.LongTensor(int(r)))
+
+        # non_final_next_states = torch.cat(list_non_final_next_states) # index 3 of tuple is next state
+        # state_batch = torch.cat(list_state_batch)
+        # action_batch = torch.cat(list_action_batch)
+        # reward_batch = torch.cat(list_reward_batch)
+        # # for s in state_batch:
+        # #     print(torch.from_numpy(np.array([s.unsqueeze(dim=0).item()]).astype(np.float32)))
+
+        # # state_action_values = [self.policy_net(torch.from_numpy(np.array([s.unsqueeze(dim=0).item()]).astype(np.float32))).gather(1, action_batch) for s in state_batch]
+        # state_action_values = [self.policy_net(torch.from_numpy(np.array([s.unsqueeze(dim=0).item()]).astype(np.float32))) for s in state_batch]
+
+        # # print("state_batch", len(state_batch))
+        # # state_action_values = [self.policy_net(s.unsqueeze(dim=0)) for s in state_batch]
+
+        # print("TEST0")
+        # next_state_values = torch.zeros(self.BATCH_SIZE, device=self.device)
+        # next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1)[0].detach()
+        # # Compute the expected Q values
+        # expected_state_action_values = (next_state_values * self.GAMMA) + reward_batch
+
+        # # Compute Huber loss
+        # criterion = nn.SmoothL1Loss()
+        # loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+
+        # # Optimize the model
+        # print("TEST1")
+        # self.optimizer.zero_grad()
+        # print("TEST2")
+        # loss.backward()
+        # for param in self.policy_net.parameters():
+        #     param.grad.data.clamp_(-1, 1)
+        # self.optimizer.step()
+
+
+    def select_action(self, s, eps):
+        global steps_done
+
+        if np.random.rand() < eps:
+            #return np.random.choice(self.n_actions)
+            return random.sample([0, 1, 2, 3], 2)
+            #return torch.tensor([[random.randrange(self.n_actions)]], device=self.device, dtype=torch.long)
+        else:
+            with torch.no_grad():
+                s = np.array([s])
+                s = torch.from_numpy(s)
+                # s = s.to(torch.long)
+                # s = s.type(torch.LongTensor)
+                s = s.float()
+                actions = []
+                for actionLogits in self.policy_net(s):
+                    # print("actionLogits", actionLogits)
+                    # print("torch.argmax(actionLogits)", torch.argmax(actionLogits))
+                    # print("actionLogits.unsqueeze(1).max(1)", actionLogits.unsqueeze(1).max(1))
+                    # print("actionLogits.unsqueeze(1).max(1)[0]", actionLogits.unsqueeze(1).max(1)[0])
+                    #actions.append(actionLogits.unsqueeze(1).max(1)[1].view(1, 1))
+                    actions.append(torch.argmax(actionLogits))
+                return actions
+
+            # break tie uniformly
+            # if other_q_table is None:
+            #     return np.random.choice(np.flatnonzero(self.q_table[s] == self.q_table[s].max()))
+            # else:
+            #     q_table = (1 - alpha) * self.q_table[s] + alpha * other_q_table[s]
+            #     return np.random.choice(np.flatnonzero(q_table == q_table.max()))
+    
+    def plot_durations(self):
+        plt.figure(2)
+        plt.clf()
+        durations_t = torch.tensor(self.episode_durations, dtype=torch.float)
+        plt.title('Training...')
+        plt.xlabel('Episode')
+        plt.ylabel('Duration')
+        plt.plot(durations_t.numpy())
+        # Take 100 episode averages and plot them too
+        if len(durations_t) >= 100:
+            means = durations_t.unfold(0, 100, 1).mean(1).view(-1)
+            means = torch.cat((torch.zeros(99), means))
+            plt.plot(means.numpy())
+
+        plt.pause(0.001)  # pause a bit so that plots are updated
+        if self.is_ipython:
+            display.clear_output(wait=True)
+            display.display(plt.gcf())
+    
+    # def update_count():
+    #     raise NotImplementedError
+        
+    # def update_q():
+    #     raise NotImplementedError
+    
+    # def update_q_from_D():
+    #     raise NotImplementedError
 
 
 

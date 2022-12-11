@@ -1,4 +1,4 @@
-from q_learner import QLearning, ExpBonusQLearning, ActiveQLearning
+from q_learner import QLearning, ExpBonusQLearning, ActiveQLearning, DeepQLearning
 import numpy as np
 from functools import reduce
 import random
@@ -11,6 +11,9 @@ from env.env_factory import get_env
 import os
 import csv
 from collections import deque
+
+import matplotlib.pyplot as plt
+import pandas as pd
 
 
 def get_args():
@@ -38,6 +41,9 @@ def get_args():
     parser.add_argument('--exp_batch_name', type=str, default='exp_batch_no_name')
     parser.add_argument('--replay_size', type=int, default=400000)
     parser.add_argument('--bonus_coef', type=float, default=0.05)
+    parser.add_argument('--lbda', choices={"0", "1"})
+    parser.add_argument('--p', choices={"1", "2"}) # must be 1, or 2
+    parser.add_argument('--use_HER', type=str, choices={'True', 'False'})
     args = parser.parse_args()
     return args
 
@@ -52,7 +58,7 @@ def eval(policy1, policy2, eval_env, raw_obs_dim):
             s, _ = obs_to_int_pi(s, base=eval_env.grid_size, raw_dim=raw_obs_dim)
             a1 = policy1.select_action(s, 0)
             a2 = policy2.select_action(s, 0)
-            s_next, r, done = eval_env.step([a1, a2])
+            s_next, r, done = eval_env.step([a1, a2]) # s_next contains the agents, and box locations
             episode_rew += r
             s = s_next
             if done:
@@ -109,6 +115,31 @@ def main():
         q_learner_target1 = ActiveQLearning(**kargs)
         q_learner_target2 = ActiveQLearning(**kargs)
         eps = 0
+    
+    if args.exp_mode == 'active_dqn':
+        kargs.update({'all_subspace': args.all_subspace,
+                      'tree_subspace': args.tree_subspace,
+                      'no_range_info': args.no_range_info,
+                      'stochastic_select_subspace': True, # args.stochastic_select_subspace,
+                      'recip_t': args.recip_t,
+                      'subspace_q_size': args.subspace_q_size,
+                      'replay_size': args.replay_size,
+                      'level_penalty': args.level_penalty,
+                      'priority_sample':not args.random_sample})
+        eps = 1
+        meta_q = DeepQLearning(**kargs)
+        kargs['n_actions'] = env.action_space.nvec[0]
+        q_learner1 = DeepQLearning(**kargs)
+        #q_learner1.trainDQN(env, eps, 1)
+        q_learner2 = DeepQLearning(**kargs)
+        #q_learner2.trainDQN(env, eps, 2)
+
+        kargs['alpha'] = args.alpha2
+        q_learner_target1 = DeepQLearning(**kargs)
+        #q_learner_target1.trainDQN(env, eps, 1)
+        q_learner_target2 = DeepQLearning(**kargs)
+        #q_learner_target2.trainDQN(env, eps, 2)
+    
     elif args.exp_mode == 'epsilon':
         kargs['n_actions'] = env.action_space.nvec[0]
         q_learner1 = QLearning(**kargs)
@@ -133,6 +164,10 @@ def main():
     eval_rews = []
     if args.exp_mode == 'active_cen':
         norm_ents_log = [[] for _ in range(sum(len(row) for row in meta_q.counts))]
+    
+    if args.exp_mode == 'active_dqn':
+        norm_ents_log = [[] for _ in range(sum(len(row) for row in meta_q.counts))]
+
     selected_count_id = []
     selected_level = []
     n_new_state_action_list = []
@@ -143,6 +178,12 @@ def main():
     episode_step, total_step_count = 0, 0
     total_step_count_list = []
 
+    # HER_reward = 0
+    q_learner1_loss = []
+    q_learner2_loss = []
+    q_learner_target1_loss = []
+    q_learner_target2_loss = []
+
     while True:
         agent1_count[s_raw[1], s_raw[0]] += 1
         agent2_count[s_raw[3], s_raw[2]] += 1
@@ -150,7 +191,10 @@ def main():
         total_step_count += 1
         if args.exp_mode == 'epsilon' or args.exp_mode == 'bonus':
             eps = init_eps * (1 - (episode_count / args.total_episode))
-        if args.mixed_explore:
+        if args.exp_mode == 'active_dqn' and args.mixed_explore:
+            a1 = q_learner1.select_action(s, eps)
+            a2 = q_learner2.select_action(s, eps)
+        elif args.mixed_explore:
             alpha = episode_count / args.total_episode
             a1 = q_learner1.select_action(s, eps, q_learner_target1.q_table, alpha)
             a2 = q_learner2.select_action(s, eps, q_learner_target2.q_table, alpha)
@@ -159,8 +203,18 @@ def main():
             a2 = q_learner2.select_action(s, eps)
             q_learner1.update_count(s, a1)
             q_learner2.update_count(s, a2)
+        
+        if args.exp_mode == 'active_dqn':
+            #print("A1", a1)
+            a1 = [x for x in a1][0]
+            a2 = [x for x in a2][1]
+            # print("A1", a1)
 
         a = env.action_space.nvec[0] * a1 + a2
+        # print("env.action_space.nvec[0]", env.action_space.nvec[0])
+        # print("a1", a1)
+        # print("a2", a2)
+        #print(s, a)
         if meta_counter.count[s, a] == 0:
             n_new_state_action += 1
         meta_counter.update_count(s, a)
@@ -171,11 +225,30 @@ def main():
         episode_actions.append([a1, a2])
         episode_states.append(s)
         if 'active' in args.exp_mode and episode_count >= 1 and (
-                s == goal_s or s == s_to_sp(goal_s, base=env.grid_size, raw_dim=raw_obs_dim)):
+                s == goal_s or s == s_to_sp(goal_s, base=env.grid_size, raw_dim=raw_obs_dim)): 
             steps_to_goal = episode_step
-        s_next_raw, r, done = env.step([a1, a2])
+        s_next_raw, r, done = env.step([a1, a2]) # s_next_raw contains the agents, and box locations
+        if args.use_HER == 'True':
+            # print("S", s)
+            # print("goal_s", goal_s)
+            # print("goal_a", goal_a)
+            # print("goal_a1", goal_a1)
+            # print("goal_a2", goal_a2)
+            # print("s_next_raw", s_next_raw)
+            averageDistFromBoxToAllEdges = 0
+            box_loc = [s_next_raw[4], s_next_raw[5]]
+            allStates = [(x, y) for x in range(env.grid_size) for y in range(env.grid_size)]
+            goalStates = list(filter(lambda x: x[0] == 0 or x[0] == env.grid_size - 1 or x[1] == 0 or x[1] == env.grid_size - 1, allStates))
+            goalStates = [t for t in (set(tuple(i) for i in goalStates))] # remove duplicates
+            for goalState in goalStates:
+                averageDistFromBoxToAllEdges = averageDistFromBoxToAllEdges + np.linalg.norm(np.array([goalState[0], goalState[1]]) - np.array(box_loc))
+            averageDistFromBoxToAllEdges = averageDistFromBoxToAllEdges/len(goalStates)
+            HER_reward = int(args.lbda) * averageDistFromBoxToAllEdges**int(args.p) - averageDistFromBoxToAllEdges**int(args.p) # use formula from HER paper
+            r = r + HER_reward
         s_next, s_next_p = obs_to_int_pi(s_next_raw, base=env.grid_size, raw_dim=raw_obs_dim)
         if 'active' in args.exp_mode:
+            # print("S", s)
+            # print("A1", a1)
             q_learner1.insert_data(s, a1, r, s_next, done)
             q_learner2.insert_data(s, a2, r, s_next, done)
             q_learner_target1.insert_data(s, a1, r, s_next, done)
@@ -184,6 +257,10 @@ def main():
         else:
             q_learner1.update_q(s, a1, r, s_next, done)
             q_learner2.update_q(s, a2, r, s_next, done)
+
+        # if args.use_HER == 'True':
+        #     # Remove HER reward, so metrics are accurate
+        #     r = r - HER_reward
 
         episode_rew += r
         s = s_next
@@ -212,6 +289,11 @@ def main():
                 q_learner_target2.update_q_from_D(reset_q=False)
                 q_learner1.update_q_from_D(goal=(goal_s, goal_a1))
                 q_learner2.update_q_from_D(goal=(goal_s, goal_a2))
+                if args.exp_mode == 'active_dqn':
+                    q_learner1_loss.append(q_learner1.optimize_model(0))
+                    q_learner2_loss.append(q_learner2.optimize_model(1))
+                    q_learner_target1_loss.append(q_learner_target1.optimize_model(0))
+                    q_learner_target2_loss.append(q_learner_target2.optimize_model(1))
                 meta_q.goal_q.clear()
             episode_actions = []
             episode_states = []
@@ -247,6 +329,41 @@ def main():
             s, s_p = obs_to_int_pi(s_raw, base=env.grid_size, raw_dim=raw_obs_dim)
             if episode_count >= args.total_episode:
                 break
+    if args.exp_mode == 'active_dqn':
+        # Plot loss
+        losses = {
+            'q_learner1_loss':q_learner1_loss,
+            'q_learner2_loss':q_learner2_loss,
+            'q_learner_target1_loss':q_learner_target1_loss,
+            'q_learner_target2_loss':q_learner_target2_loss
+        }
+        df = pd.DataFrame(losses) 
+        df.to_csv(log_path + 'losses.csv')
+
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(18, 22))
+
+        ax1.plot(q_learner1_loss)
+        ax1.set_title("Q-Learner 1 Loss")
+        ax1.set_xlabel("Episode")
+        ax1.set_ylabel("Loss")
+
+        ax2.plot(q_learner2_loss)
+        ax2.set_title("Q-Learner 2 Loss")
+        ax2.set_xlabel("Episode")
+        ax2.set_ylabel("Loss")
+
+        ax3.plot(q_learner_target1_loss)
+        ax3.set_title("Q-Learner 1 Target Loss")
+        ax3.set_xlabel("Episode")
+        ax3.set_ylabel("Loss")
+
+        ax4.plot(q_learner_target2_loss)
+        ax4.set_title("Q-Learner 2 Target Loss")
+        ax4.set_xlabel("Episode")
+        ax4.set_ylabel("Loss")
+
+        fig.tight_layout(pad=3.0)
+        plt.show
 
 
 if __name__ == "__main__":

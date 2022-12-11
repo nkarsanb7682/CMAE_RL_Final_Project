@@ -18,7 +18,7 @@ class Box(Entity):
 
 
 class PushBox(object):
-    def __init__(self, H=300, grid_size=15, n_actions=4, n_agents=2, checkpoint=False):
+    def __init__(self, H=300, grid_size=10, n_actions=4, n_agents=2, checkpoint=False):
         # (x1, y1, x2, y2, door1_opened, door2_opened, door3_opened)
         self.observation_space = gym.spaces.MultiDiscrete([grid_size, grid_size, grid_size, grid_size, grid_size, grid_size])
         # each agent can choose one branch at each timestep
@@ -47,18 +47,27 @@ class PushBox(object):
             self.cur_checkpoint = {'dir':-1, 'dist':0}
         return np.array([self.agents[0].x, self.agents[0].y, self.agents[1].x, self.agents[1].y, self.box.x, self.box.y])
 
-    def step(self, action):
+    def step(self, action, training=False):
         assert not self.done, "error: Trying to call step() after an episode is done"
         obs = []
         self._compute_force(action)
         self._update_box_location()
+        #print("self.agents", self.agents)
         for agent_id, agent in enumerate(self.agents):
+            # print("action", action)
+            # print("agent_id", )
             self._update_agent_location(agent_id, action[agent_id])
             obs.extend([agent.x, agent.y])
         obs.extend([self.box.x, self.box.y])
         self.step_count += 1
         rew = self._reward()
+        #print("self.step_count", self.step_count)
+        # if(training):
+        #     self.H = 3000
         self.done = True if self.step_count == self.H or rew >= 1 else False
+
+        # if(training and self.step_count == self.H):
+        #     self.reset()
 
         return np.array(obs), rew, self.done
 
@@ -102,14 +111,25 @@ class PushBox(object):
 
     def _update_agent_location(self, agent_id, action):
         x, y = self.agents[agent_id].x, self.agents[agent_id].y
+        # print("agent id", agent_id, self.agents)
+        # print(action)
+        # print("top", self.wall_map[y + 1, x])
+        # print("bot", self.wall_map[y + 1, x])
+        # print("left", self.wall_map[y, x - 1])
+        # print("right", self.wall_map[y, x + 1])
         if action == TOP and y > 0 and self.wall_map[y - 1, x] == 0:
+            #print("TOP")
             self.agents[agent_id].y -= 1
         elif action == BOT and y < self.grid_size - 1 and self.wall_map[y + 1, x] == 0:
+            #print("BOT")
             self.agents[agent_id].y += 1
         elif action == LEFT and x > 0 and self.wall_map[y, x - 1] == 0:
+            #print("LEFT")
             self.agents[agent_id].x -= 1
         elif action == RIGHT and x < self.grid_size - 1 and self.wall_map[y, x + 1] == 0:
+            #print("RIGHT")
             self.agents[agent_id].x += 1
+        #print("XY", self.agents[agent_id].x, self.agents[agent_id].y)
 
     def _dist(self, e1, e2):
         return np.sqrt((e1.x - e2.x) ** 2 + (e1.y - e2.y) ** 2)
@@ -117,6 +137,9 @@ class PushBox(object):
     def _reward(self):
         rew = 0
         # If box is against a wall, give a reward (MEANS THIS IS A SPARSE REWARD)
+
+        # Change so that reward is augmented with rewards from goal_replay_buffer (I think)
+
         if self.box.x - self.box.radius == 0 or self.box.x + self.box.radius == self.grid_size - 1 \
                 or self.box.y - self.box.radius == 0 or self.box.y + self.box.radius == self.grid_size - 1:
             rew += self.success_rew
