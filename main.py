@@ -174,6 +174,7 @@ def main():
                 s == goal_s or s == s_to_sp(goal_s, base=env.grid_size, raw_dim=raw_obs_dim)):
             steps_to_goal = episode_step
         s_next_raw, r, done = env.step([a1, a2])
+        #print("just did eval # 2 !!!!!")
         s_next, s_next_p = obs_to_int_pi(s_next_raw, base=env.grid_size, raw_dim=raw_obs_dim)
         if 'active' in args.exp_mode:
             q_learner1.insert_data(s, a1, r, s_next, done)

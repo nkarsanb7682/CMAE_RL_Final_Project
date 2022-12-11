@@ -16,7 +16,7 @@ ENV_MAP = {
     'secret_room': functools.partial(SecretRooms, H=300, grid_size=25, n_actions=4, n_agents=2),
     'secret_room_ckpt': functools.partial(SecretRooms, H=300, grid_size=25, n_actions=4, n_agents=2, checkpoint=True),
     'push_box': functools.partial(PushBox, H=300, grid_size=15, n_actions=4, n_agents=2),
-    'push_box_ckpt': functools.partial(PushBox, H=300, grid_size=15, n_actions=4, n_agents=2, checkpoint=True),
+    'push_box_ckpt': functools.partial(PushBox, H=300, grid_size=15, n_actions=4, n_agents=2, checkpoint=True,),
 }
 
 

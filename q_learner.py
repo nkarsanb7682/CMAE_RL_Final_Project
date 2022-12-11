@@ -275,6 +275,7 @@ class ActiveQLearning(QLearning):
         self.recip_t = recip_t
         self.level_penalty = level_penalty
         self.priority_sample = priority_sample
+        #self.model = ICMModel()
 
     def compute_ent_subspaces(self, subspaces):
         """
@@ -348,6 +349,7 @@ class ActiveQLearning(QLearning):
         :param count_id:
         :return: goal
         """
+
         count = self.counts[level][count_id]
         states, state_inds = self.replay_buffer.sample_states(bz=bz)
         raw_s = int_to_obs(states, self.base, self.raw_dim)

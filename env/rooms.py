@@ -57,6 +57,7 @@ class Rooms(gym.Env):
         self.ckpts = {'left_switch': [[False, bin] for bin in self.ckpt_bins['left_switch']],
                       'door': [[False, bin] for bin in self.ckpt_bins['door']],
                       'right_switch': [[False, bin] for bin in self.ckpt_bins['right_switch']]}
+
         return np.array([self.agents[0].x, self.agents[0].y, self.agents[1].x, self.agents[1].y, self.door.open])
 
     def step(self, action):

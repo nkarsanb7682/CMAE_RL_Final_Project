@@ -3,7 +3,6 @@ import copy
 from env.rooms import Entity
 import gym
 
-
 TOP = 0
 BOT = 1
 LEFT = 2
@@ -17,13 +16,15 @@ class Box(Entity):
         self.force = np.zeros(4)
 
 
-class PushBox(object):
-    def __init__(self, H=300, grid_size=15, n_actions=4, n_agents=2, checkpoint=False):
-        # (x1, y1, x2, y2, door1_opened, door2_opened, door3_opened)
-        self.observation_space = gym.spaces.MultiDiscrete([grid_size, grid_size, grid_size, grid_size, grid_size, grid_size])
+class PushBox(gym.Env):
+    def __init__(self, H=200, grid_size=10, n_actions=4, n_agents=2, checkpoint=False):
+        # (x1, y1, x2, y2, box x, box y)
+        self.observation_space = gym.spaces.MultiDiscrete(
+            [grid_size, grid_size, grid_size, grid_size, grid_size, grid_size])
         # each agent can choose one branch at each timestep
         self.action_space = gym.spaces.MultiDiscrete([n_actions] * n_agents)
-        self.init_agents = [Entity(4 + grid_size // 2, 4 + grid_size // 2), Entity(2 + grid_size // 2, 2 + grid_size // 2)]
+        self.init_agents = [Entity(4 + grid_size // 2, 4 + grid_size // 2),
+                            Entity(2 + grid_size // 2, 2 + grid_size // 2)]
         self.init_box = Box(grid_size // 2, grid_size // 2)
         self.wall_map = np.zeros((grid_size, grid_size))
         self.n_agents = n_agents
@@ -33,8 +34,9 @@ class PushBox(object):
         self.done = False
         self.agents, self.box = None, None
         self.checkpoint = checkpoint
+        #self._max_episode_steps = self.H  # lazy solution to warning log
         if self.checkpoint:
-            self.cur_checkpoint = {'dir':-1, 'dist':0}
+            self.cur_checkpoint = {'dir': -1, 'dist': 0}
         self.success_rew = 1
 
     def reset(self):
@@ -44,8 +46,16 @@ class PushBox(object):
         self.step_count = 0
         self.done = False
         if self.checkpoint:
-            self.cur_checkpoint = {'dir':-1, 'dist':0}
-        return np.array([self.agents[0].x, self.agents[0].y, self.agents[1].x, self.agents[1].y, self.box.x, self.box.y])
+            self.cur_checkpoint = {'dir': -1, 'dist': 0}
+        return np.array(
+            [self.agents[0].x, self.agents[0].y, self.agents[1].x, self.agents[1].y, self.box.x, self.box.y])
+
+    def render_frame(self):
+        print("First agent location:")
+        print(self.agents[0].x, self.agents[0].y)
+        print("Second agent location:")
+        print(self.agents[1].x, self.agents[1].y)
+        print(f"Box position:{self.box.x}, {self.box.y}")
 
     def step(self, action):
         assert not self.done, "error: Trying to call step() after an episode is done"
@@ -59,8 +69,12 @@ class PushBox(object):
         self.step_count += 1
         rew = self._reward()
         self.done = True if self.step_count == self.H or rew >= 1 else False
+        # self.render_frame()
+        info = self._get_info()
+        return np.array(obs), rew, self.done, info
 
-        return np.array(obs), rew, self.done
+    def _get_info(self):
+        return {"distance between agents": self._dist(self.agents[0], self.agents[1])}
 
     def _compute_force(self, actions):
         # compute force on the box
@@ -97,8 +111,8 @@ class PushBox(object):
 
     def _update_wall(self):
         self.wall_map[:] = 0
-        self.wall_map[max(0, self.box.y - self.box.radius) : min(self.grid_size, self.box.y + self.box.radius + 1),
-            max(0, self.box.x - self.box.radius) : min(self.grid_size, self.box.x + self.box.radius + 1)] = 1
+        self.wall_map[max(0, self.box.y - self.box.radius): min(self.grid_size, self.box.y + self.box.radius + 1),
+        max(0, self.box.x - self.box.radius): min(self.grid_size, self.box.x + self.box.radius + 1)] = 1
 
     def _update_agent_location(self, agent_id, action):
         x, y = self.agents[agent_id].x, self.agents[agent_id].y
@@ -152,11 +166,3 @@ class PushBox(object):
                 rew += 0.1
                 self.cur_checkpoint['dist'] = self.init_box.x - self.box.x
         return rew
-
-
-
-
-
-
-
-
