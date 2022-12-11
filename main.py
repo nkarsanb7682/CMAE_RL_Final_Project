@@ -4,6 +4,7 @@ from functools import reduce
 import random
 from utils.convert2base import obs_to_int_pi, s_to_sp, convert_to_base
 import sys
+from PIL import Image
 
 np.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
 import argparse
@@ -78,6 +79,8 @@ def main():
     seed = args.seed
     np.random.seed(seed)
     random.seed(seed)
+
+    frames = []
 
     env = get_env(args.env)()
     eval_env = get_env(args.env)()
@@ -245,6 +248,15 @@ def main():
             averageDistFromBoxToAllEdges = averageDistFromBoxToAllEdges/len(goalStates)
             HER_reward = int(args.lbda) * averageDistFromBoxToAllEdges**int(args.p) - averageDistFromBoxToAllEdges**int(args.p) # use formula from HER paper
             r = r + HER_reward
+
+            # create frame
+            map = np.zeros((env.grid_size, env.grid_size))
+            map[s_next_raw[0], s_next_raw[1]] = 1
+            map[s_next_raw[2], s_next_raw[3]] = 2
+            map[s_next_raw[4], s_next_raw[5]] = 3
+            map = map.repeat(50, 1).repeat(50, 0)
+            frames.append(map)
+
         s_next, s_next_p = obs_to_int_pi(s_next_raw, base=env.grid_size, raw_dim=raw_obs_dim)
         if 'active' in args.exp_mode:
             # print("S", s)
@@ -267,6 +279,10 @@ def main():
         s_raw = s_next_raw
 
         if done:
+            imgs = [Image.fromarray(img*255) for img in frames]
+            imgs[0].save("array.gif", save_all=True, append_images=imgs[1:], duration=100, loop=1)
+            print("Saving gif")
+            break
             episode_states.append(s)
             episode_count += 1
             episode_rews.append(episode_rew)
