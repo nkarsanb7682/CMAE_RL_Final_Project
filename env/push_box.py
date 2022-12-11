@@ -2,6 +2,7 @@ import numpy as np
 import copy
 from env.rooms import Entity
 import gym
+from PIL import Image
 
 TOP = 0
 BOT = 1
@@ -38,6 +39,7 @@ class PushBox(gym.Env):
         if self.checkpoint:
             self.cur_checkpoint = {'dir': -1, 'dist': 0}
         self.success_rew = 1
+        self.frames = []
 
     def reset(self):
         self.agents = copy.deepcopy(self.init_agents)
@@ -71,6 +73,20 @@ class PushBox(gym.Env):
         self.done = True if self.step_count == self.H or rew >= 1 else False
         # self.render_frame()
         info = self._get_info()
+        # create frame
+        map = np.zeros((self.grid_size, self.grid_size))
+        map[obs[0], obs[1]] = 1
+        map[obs[2], obs[3]] = 2
+        map[obs[4], obs[5]] = 3
+        map = map.repeat(50, 1).repeat(50, 0)
+        self.frames.append(map)
+
+        if self.done:
+            imgs = [Image.fromarray(img*255) for img in self.frames]
+            imgs[0].save("array.gif", save_all=True, append_images=imgs[1:], duration=100, loop=1)
+            print("Saving gif")
+            self.frames = []
+
         return np.array(obs), rew, self.done, info
 
     def _get_info(self):
