@@ -70,10 +70,7 @@ class PushBox(gym.Env):
         obs.extend([self.box.x, self.box.y])
         self.step_count += 1
         rew = self._reward()
-        self.done = True if self.step_count == self.H or rew >= 1 else False
-        # self.render_frame()
-        info = self._get_info()
-        # create frame
+
         map = np.zeros((self.grid_size, self.grid_size))
         map[obs[0], obs[1]] = 1
         map[obs[2], obs[3]] = 2
@@ -81,11 +78,16 @@ class PushBox(gym.Env):
         map = map.repeat(50, 1).repeat(50, 0)
         self.frames.append(map)
 
-        if self.done:
+        if rew >= 1:
             imgs = [Image.fromarray(img*255) for img in self.frames]
             imgs[0].save("array.gif", save_all=True, append_images=imgs[1:], duration=100, loop=1)
             print("Saving gif")
             self.frames = []
+
+        self.done = True if self.step_count == self.H or rew >= 1 else False
+        # self.render_frame()
+        info = self._get_info()
+        # create frame
 
         return np.array(obs), rew, self.done, info
 
