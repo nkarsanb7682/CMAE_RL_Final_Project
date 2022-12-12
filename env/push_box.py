@@ -62,6 +62,14 @@ class PushBox(gym.Env):
     def step(self, action):
         assert not self.done, "error: Trying to call step() after an episode is done"
         obs = []
+
+        a1x = self.agents[0].x
+        a1y = self.agents[0].y
+        a2x = self.agents[1].x
+        a2y = self.agents[1].y
+        bx = self.box.x
+        by = self.box.y
+
         self._compute_force(action)
         self._update_box_location()
         for agent_id, agent in enumerate(self.agents):
@@ -72,9 +80,9 @@ class PushBox(gym.Env):
         rew = self._reward()
 
         map = np.zeros((self.grid_size, self.grid_size))
-        map[obs[0], obs[1]] = 1
-        map[obs[2], obs[3]] = 2
-        map[obs[4], obs[5]] = 3
+        map[a1x, a1y] = 1
+        map[a2x, a2y] = 2
+        map[bx, by] = 3
         map = map.repeat(50, 1).repeat(50, 0)
         self.frames.append(map)
 
