@@ -44,15 +44,18 @@ class TestPPOCuriosity:
 
         num_iterations = 1000
         chkpt_root = "tmp/icm"
-        shutil.rmtree(chkpt_root, ignore_errors=True, onerror=None)
-        if os.path.exists('ppo_icm_results.csv'): os.remove('ppo_icm_results.csv')
+        #shutil.rmtree(chkpt_root, ignore_errors=True, onerror=None)
+        filename = 'temp.csv'
+        if os.path.exists(filename): os.remove(filename)
         for _ in framework_iterator(config, frameworks="torch"):
             # W/ Curiosity
             self.envCreator(env="push_box")
             algo = config.build(env="push_box")
-            with open('ppo_icm_results.csv', 'w') as file:
+            algo.restore(chkpt_root+'/checkpoint_000176')
+            with open(filename, 'w') as file:
                 writer = csv.writer(file)
                 for i in range(num_iterations):
+                    print(f"curr iter: {i}")
                     result = algo.train()
                     max_reward = result["episode_reward_max"]
                     done = max_reward > 0
@@ -60,11 +63,12 @@ class TestPPOCuriosity:
                     steps = result["info"]["num_env_steps_trained"]
                     curr_res = [i, max_reward, loss, steps, done]
                     writer.writerow(curr_res)
-                    if i % 25 == 0:
-                        chkpt_file = algo.save(chkpt_root)
-                        print("checkpoint saved at: ", chkpt_file)
+                    # if i % 25 == 0:
+                    #     chkpt_file = algo.save(chkpt_root)
+                    #     print("checkpoint saved at: ", chkpt_file)
                     if max_reward > 0.0:
                         print("Reached goal after {} iters!".format(i))
+                        break
             algo.stop()
 
 

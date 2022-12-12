@@ -74,19 +74,24 @@ class PushBox(gym.Env):
         # self.render_frame()
         info = self._get_info()
         # create frame
-        map = np.zeros((self.grid_size, self.grid_size))
-        map[obs[0], obs[1]] = 1
-        map[obs[2], obs[3]] = 2
-        map[obs[4], obs[5]] = 3
-        map = map.repeat(50, 1).repeat(50, 0)
-        self.frames.append(map)
+        imap = np.zeros((self.grid_size, self.grid_size))
+        imap[obs[0], obs[1]] = 1
+        imap[obs[2], obs[3]] = 2
+        imap[obs[4], obs[5]] = 3
+        imap = imap.repeat(50, 1).repeat(50, 0)
+        self.frames.append(imap)
 
-        if self.done:
-            imgs = [Image.fromarray(img*255) for img in self.frames]
+        if rew >= 1:
+            imgs = [Image.fromarray(img * 255) for img in self.frames]
             imgs[0].save("array.gif", save_all=True, append_images=imgs[1:], duration=100, loop=1)
             print("Saving gif")
             self.frames = []
 
+        self.done = True if self.step_count == self.H or rew >= 1 else False
+        if self.done:
+            self.frames = []
+        # self.render_frame()
+        info = self._get_info()
         return np.array(obs), rew, self.done, info
 
     def _get_info(self):
